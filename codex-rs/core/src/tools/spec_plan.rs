@@ -762,7 +762,9 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         ));
     }
 
-    if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()
+    if environment_mode.has_environment()
+        && features.enabled(Feature::ApplyPatchTool)
+        && turn_context.model_info.apply_patch_tool_type.is_some()
     {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         planned_tools.add(ApplyPatchHandler::new(include_environment_id));
@@ -777,7 +779,7 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         planned_tools.add(TestSyncHandler);
     }
 
-    if environment_mode.has_environment() {
+    if environment_mode.has_environment() && features.enabled(Feature::ViewImageTool) {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
         planned_tools.add(ViewImageHandler::new(ViewImageToolOptions {
             can_request_original_image_detail: can_request_original_image_detail(

@@ -84,6 +84,10 @@ pub enum Feature {
     // Stable.
     /// Enable the default shell tool.
     ShellTool,
+    /// Expose the built-in apply_patch file-editing tool.
+    ApplyPatchTool,
+    /// Expose the built-in view_image tool (reads local image files).
+    ViewImageTool,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
     /// Store CLI auth in the encrypted local secrets backend when keyring storage is selected.
@@ -801,6 +805,18 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ShellTool,
         key: "shell_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ApplyPatchTool,
+        key: "apply_patch_tool",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ViewImageTool,
+        key: "view_image_tool",
         stage: Stage::Stable,
         default_enabled: true,
     },
