@@ -179,6 +179,73 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
     );
 }
 
+#[test]
+fn plain_call_falls_back_to_unique_namespaced_tool() {
+    // Regression test for the tool-routing bug: mcp-v8's `run_js` is registered
+    // under a namespaced ToolName (`mcp__js` namespace), but OSS models served
+    // over Ollama call it flat as bare `run_js`. That bare name parses to a
+    // plain ToolName which never matched the namespaced registry key, so the
+    // router rejected it as "unsupported call: run_js". The flatten-fallback in
+    // `ToolRegistry::tool()` resolves a plain name to a uniquely-named
+    // registered tool ignoring the namespace.
+    let namespace = "mcp__js";
+    let leaf = "run_js";
+    let namespaced_name = codex_tools::ToolName::namespaced(namespace, leaf);
+    let plain_name = codex_tools::ToolName::plain(leaf);
+    let handler = Arc::new(TestHandler {
+        tool_name: namespaced_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let registry = ToolRegistry::new(HashMap::from([(
+        namespaced_name.clone(),
+        Arc::clone(&handler),
+    )]));
+
+    // (a) The fix: a bare `run_js` lookup resolves to the namespaced tool.
+    let flat = registry.tool(&plain_name);
+    assert!(
+        flat.as_ref()
+            .is_some_and(|resolved| Arc::ptr_eq(resolved, &handler)),
+        "plain `run_js` should fall back to the uniquely-named namespaced tool"
+    );
+
+    // (c) Exact namespaced lookup still works.
+    let exact = registry.tool(&namespaced_name);
+    assert!(
+        exact
+            .as_ref()
+            .is_some_and(|resolved| Arc::ptr_eq(resolved, &handler)),
+        "exact namespaced lookup should resolve to the same tool"
+    );
+}
+
+#[test]
+fn plain_call_is_ambiguous_across_namespaces() {
+    // (b) When two tools share a leaf name under different namespaces, a bare
+    // plain lookup is ambiguous and must resolve to None so we never dispatch
+    // the wrong tool.
+    let leaf = "run_js";
+    let js_name = codex_tools::ToolName::namespaced("mcp__js", leaf);
+    let other_name = codex_tools::ToolName::namespaced("mcp__other", leaf);
+    let js_handler = Arc::new(TestHandler {
+        tool_name: js_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let other_handler = Arc::new(TestHandler {
+        tool_name: other_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let registry = ToolRegistry::new(HashMap::from([
+        (js_name.clone(), js_handler),
+        (other_name.clone(), other_handler),
+    ]));
+
+    assert!(
+        registry.tool(&codex_tools::ToolName::plain(leaf)).is_none(),
+        "ambiguous plain lookup must not dispatch to an arbitrary tool"
+    );
+    // Exact namespaced lookups remain unambiguous.
+    assert!(registry.tool(&js_name).is_some());
+    assert!(registry.tool(&other_name).is_some());
+}
+
 #[tokio::test]
 async fn function_tools_expose_default_hook_payloads_and_rewrites() -> anyhow::Result<()> {
     let (session, turn) = crate::session::tests::make_session_and_context().await;
