@@ -40,8 +40,17 @@ pub struct ProviderCapabilities {
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
-            namespace_tools: true,
-            image_generation: true,
+            // Expose MCP-server tools FLAT and directly callable rather than
+            // nested under an `mcp__<server>` namespace stub. Namespacing also
+            // enables the tool_search deferral, which together left the
+            // mcp-v8 `run_js` tool advertised-but-uncallable on
+            // OpenAI-compatible providers whose models call the tool by its
+            // bare name (Ollama gpt-oss/qwen). nanocodex relies on run_js as
+            // the model's primary capability, so keep it flat + direct.
+            namespace_tools: false,
+            // nanocodex's only capability is run_js; drop the image-generation
+            // tool so it doesn't clutter the model's tool list.
+            image_generation: false,
             web_search: true,
         }
     }
