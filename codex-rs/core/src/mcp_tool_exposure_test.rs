@@ -238,7 +238,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn defers_effective_tool_sets_when_search_is_available() {
+async fn keeps_plain_mcp_tools_direct_when_search_is_available() {
     let config = test_config().await;
     let mcp_tools = numbered_mcp_tools(/*count*/ 2);
 
@@ -246,16 +246,14 @@ async fn defers_effective_tool_sets_when_search_is_available() {
         &mcp_tools, /*connectors*/ None, &config, /*search_tool_enabled*/ true,
     );
 
-    assert!(exposure.direct_tools.is_empty());
-    let deferred_tools = exposure
-        .deferred_tools
-        .as_ref()
-        .expect("MCP tools should be discoverable through tool_search");
-    assert_eq!(tool_names(deferred_tools), tool_names(&mcp_tools));
+    // Plain (non-codex-apps) MCP-server tools stay directly callable even when
+    // tool_search is available; only codex-apps connector tools are deferred.
+    assert_eq!(tool_names(&exposure.direct_tools), tool_names(&mcp_tools));
+    assert!(exposure.deferred_tools.is_none());
 }
 
 #[tokio::test]
-async fn defers_apps_and_non_app_mcp_tools() {
+async fn defers_only_apps_mcp_tools_keeping_plain_tools_direct() {
     let config = test_config().await;
     let mcp_tools = vec![
         make_mcp_tool(
@@ -284,13 +282,17 @@ async fn defers_apps_and_non_app_mcp_tools() {
         /*search_tool_enabled*/ true,
     );
 
-    assert!(exposure.direct_tools.is_empty());
+    // The plain server tool stays direct; only the codex-apps connector tool
+    // is deferred behind tool_search.
+    assert!(
+        tool_names(&exposure.direct_tools).contains(&ToolName::namespaced("mcp__rmcp", "tool"))
+    );
     let deferred_tools = exposure
         .deferred_tools
         .as_ref()
-        .expect("MCP tools should be discoverable through tool_search");
+        .expect("codex-apps connector tools should be discoverable through tool_search");
     let deferred_tool_names = tool_names(deferred_tools);
-    assert!(deferred_tool_names.contains(&ToolName::namespaced("mcp__rmcp", "tool")));
+    assert!(!deferred_tool_names.contains(&ToolName::namespaced("mcp__rmcp", "tool")));
     assert!(deferred_tool_names.contains(&ToolName::namespaced(
         "mcp__codex_apps__calendar",
         "_create_event"

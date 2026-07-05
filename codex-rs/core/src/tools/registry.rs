@@ -357,7 +357,31 @@ impl ToolRegistry {
     }
 
     fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.tools.get(name).map(Arc::clone)
+        if let Some(tool) = self.tools.get(name) {
+            return Some(Arc::clone(tool));
+        }
+        // Flatten-fallback: models served over OpenAI-compatible endpoints
+        // (notably OSS models via Ollama — gpt-oss, qwen) often collapse a
+        // namespaced tool call (e.g. the `mcp__js` namespace's `run_js`) to
+        // its bare leaf name with no namespace. That parses to a plain
+        // ToolName which never matches the namespaced registry key, so the
+        // call was rejected as "unsupported call: run_js" even though the tool
+        // is registered and advertised. When a plain name doesn't resolve,
+        // match it against a UNIQUELY-named registered tool ignoring the
+        // namespace; bail if ambiguous so we never dispatch the wrong tool.
+        if name.namespace.is_none() {
+            let mut matched: Option<&Arc<dyn CoreToolRuntime>> = None;
+            for (key, tool) in &self.tools {
+                if key.name == name.name {
+                    if matched.is_some() {
+                        return None;
+                    }
+                    matched = Some(tool);
+                }
+            }
+            return matched.map(Arc::clone);
+        }
+        None
     }
 
     #[cfg(test)]

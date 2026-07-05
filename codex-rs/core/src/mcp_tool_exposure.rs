@@ -22,9 +22,18 @@ pub(crate) fn build_mcp_tool_exposure(
     config: &Config,
     search_tool_enabled: bool,
 ) -> McpToolExposure {
-    let mut deferred_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
+    // Plain MCP-server tools (e.g. a configured stdio server's `run_js`) stay
+    // DIRECT even when the tool-search tool is enabled. Only codex-apps
+    // connector tools go behind tool-search. nanocodex leans on run_js as the
+    // model's primary capability, and deferring it behind a search step that
+    // many models never drive left run_js effectively uncallable
+    // ("unsupported call: run_js"). Deferral is meant to trim the large
+    // codex-apps connector surface, not hide first-class MCP servers.
+    let direct_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
+
+    let mut connector_tools = Vec::new();
     if let Some(connectors) = connectors {
-        deferred_tools.extend(filter_codex_apps_mcp_tools(
+        connector_tools.extend(filter_codex_apps_mcp_tools(
             all_mcp_tools,
             connectors,
             config,
@@ -32,15 +41,17 @@ pub(crate) fn build_mcp_tool_exposure(
     }
 
     if !search_tool_enabled {
+        let mut all = direct_tools;
+        all.extend(connector_tools);
         return McpToolExposure {
-            direct_tools: deferred_tools,
+            direct_tools: all,
             deferred_tools: None,
         };
     }
 
     McpToolExposure {
-        direct_tools: Vec::new(),
-        deferred_tools: (!deferred_tools.is_empty()).then_some(deferred_tools),
+        direct_tools,
+        deferred_tools: (!connector_tools.is_empty()).then_some(connector_tools),
     }
 }
 

@@ -41,7 +41,9 @@ impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
             namespace_tools: true,
-            image_generation: true,
+            // nanocodex's only capability is run_js; drop the image-generation
+            // tool so it doesn't clutter the model's tool list.
+            image_generation: false,
             web_search: true,
         }
     }
