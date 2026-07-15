@@ -340,7 +340,6 @@ impl MessageProcessor {
     }
 
     async fn handle_call_tool(&self, id: RequestId, params: CallToolRequestParams) {
-        tracing::info!("tools/call -> params: {:?}", params);
         let CallToolRequestParams {
             name, arguments, ..
         } = params;
@@ -434,8 +433,6 @@ impl MessageProcessor {
         trajectory_span: Span,
     ) {
         let arguments = arguments.map(serde_json::Value::Object);
-        tracing::info!("tools/call -> params: {:?}", arguments);
-
         // parse arguments
         let codex_tool_call_reply_param: CodexToolCallReplyParam = match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallReplyParam>(json_val) {
