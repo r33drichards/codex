@@ -56,10 +56,6 @@ invocation exports an `mcp_server.tool_call` span covering the complete Codex
 turn. The span contains only coarse protocol and tool-name attributes; prompts,
 model output, request IDs, thread IDs, and error text are not attached.
 
-Exporter initialization and delivery are best-effort. An invalid or unavailable
-OpenTelemetry exporter does not prevent the MCP server from starting or serving
-requests.
-
 ## Threads and turns
 
 Use the v2 thread and turn APIs for all new integrations. `thread/start` creates a thread, `turn/start` submits user input, `turn/interrupt` stops an in-flight turn, and `thread/list` / `thread/read` expose persisted history.
