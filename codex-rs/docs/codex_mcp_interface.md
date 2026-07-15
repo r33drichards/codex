@@ -48,6 +48,18 @@ npx @modelcontextprotocol/inspector codex mcp-server
 
 Use the separate `codex mcp` subcommand to manage configured MCP server launchers in `config.toml`.
 
+## OpenTelemetry
+
+The MCP server uses the same opt-in `[otel]` configuration as the other Codex
+entry points. When `trace_exporter` is configured, each supported `tools/call`
+invocation exports an `mcp_server.tool_call` span covering the complete Codex
+turn. The span contains only coarse protocol and tool-name attributes; prompts,
+model output, request IDs, thread IDs, and error text are not attached.
+
+Exporter initialization and delivery are best-effort. An invalid or unavailable
+OpenTelemetry exporter does not prevent the MCP server from starting or serving
+requests.
+
 ## Threads and turns
 
 Use the v2 thread and turn APIs for all new integrations. `thread/start` creates a thread, `turn/start` submits user input, `turn/interrupt` stops an in-flight turn, and `thread/list` / `thread/read` expose persisted history.

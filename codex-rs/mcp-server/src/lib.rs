@@ -78,18 +78,12 @@ pub async fn run_main(
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
     set_default_client_residency_requirement(config.enforce_residency.value());
-    let otel = codex_core::otel_init::build_provider(
+    let (otel, otel_error) = fail_open_otel(codex_core::otel_init::build_provider(
         &config,
         env!("CARGO_PKG_VERSION"),
         Some(OTEL_SERVICE_NAME),
         DEFAULT_ANALYTICS_ENABLED,
-    )
-    .map_err(|e| {
-        std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("error loading otel config: {e}"),
-        )
-    })?;
+    ));
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
     let state_db = codex_core::init_state_db(&config).await;
@@ -116,6 +110,10 @@ pub async fn run_main(
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+
+    if let Some(error) = otel_error {
+        tracing::warn!(%error, "OpenTelemetry export disabled");
+    }
 
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<IncomingMessage>(CHANNEL_CAPACITY);
@@ -202,11 +200,24 @@ pub async fn run_main(
     Ok(())
 }
 
+fn fail_open_otel<T, E>(result: Result<Option<T>, E>) -> (Option<T>, Option<String>)
+where
+    E: std::fmt::Display,
+{
+    match result {
+        Ok(otel) => (otel, None),
+        Err(error) => (None, Some(error.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use codex_config::types::OtelExporterKind;
+    use codex_config::types::OtelHttpProtocol;
+    use codex_config::types::OtelTlsConfig;
     use codex_core::config::ConfigBuilder;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -214,6 +225,40 @@ mod tests {
     #[test]
     fn mcp_server_defaults_analytics_to_enabled() {
         assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+    }
+
+    #[tokio::test]
+    async fn invalid_otel_config_disables_export_without_failing_startup() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await?;
+        config.analytics_enabled = Some(false);
+        config.otel.trace_exporter = OtelExporterKind::OtlpHttp {
+            endpoint: "https://localhost:4318/v1/traces".to_string(),
+            headers: HashMap::new(),
+            protocol: OtelHttpProtocol::Binary,
+            tls: Some(OtelTlsConfig {
+                ca_certificate: Some(AbsolutePathBuf::try_from(
+                    codex_home.path().join("missing-ca.pem"),
+                )?),
+                client_certificate: None,
+                client_private_key: None,
+            }),
+        };
+
+        let result = codex_core::otel_init::build_provider(
+            &config,
+            "0.0.0-test",
+            Some(OTEL_SERVICE_NAME),
+            DEFAULT_ANALYTICS_ENABLED,
+        );
+        let (provider, error) = fail_open_otel(result);
+
+        assert!(provider.is_none());
+        assert!(error.is_some());
+        Ok(())
     }
 
     #[tokio::test]

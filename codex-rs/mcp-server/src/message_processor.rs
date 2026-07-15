@@ -31,6 +31,9 @@ use rmcp::model::ServerCapabilities;
 use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::task;
+use tracing::Instrument;
+use tracing::Span;
+use tracing::info_span;
 
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
@@ -343,10 +346,17 @@ impl MessageProcessor {
         } = params;
 
         match name.as_ref() {
-            "codex" => self.handle_tool_call_codex(id, arguments).await,
+            "codex" => {
+                let span = mcp_tool_call_trajectory_span("codex");
+                self.handle_tool_call_codex(id, arguments, span.clone())
+                    .instrument(span)
+                    .await;
+            }
             "codex-reply" => {
-                self.handle_tool_call_codex_session_reply(id, arguments)
-                    .await
+                let span = mcp_tool_call_trajectory_span("codex-reply");
+                self.handle_tool_call_codex_session_reply(id, arguments, span.clone())
+                    .instrument(span)
+                    .await;
             }
             _ => {
                 let result = CallToolResult::error(vec![rmcp::model::Content::text(format!(
@@ -361,6 +371,7 @@ impl MessageProcessor {
         &self,
         id: RequestId,
         arguments: Option<rmcp::model::JsonObject>,
+        trajectory_span: Span,
     ) {
         let arguments = arguments.map(serde_json::Value::Object);
         let (initial_prompt, config): (String, Config) = match arguments {
@@ -399,24 +410,28 @@ impl MessageProcessor {
 
         // Spawn an async task to handle the Codex session so that we do not
         // block the synchronous message-processing loop.
-        task::spawn(async move {
-            // Run the Codex session and stream events back to the client.
-            crate::codex_tool_runner::run_codex_tool_session(
-                id,
-                initial_prompt,
-                config,
-                outgoing,
-                thread_manager,
-                running_requests_id_to_codex_uuid,
-            )
-            .await;
-        });
+        task::spawn(
+            async move {
+                // Run the Codex session and stream events back to the client.
+                crate::codex_tool_runner::run_codex_tool_session(
+                    id,
+                    initial_prompt,
+                    config,
+                    outgoing,
+                    thread_manager,
+                    running_requests_id_to_codex_uuid,
+                )
+                .await;
+            }
+            .instrument(trajectory_span),
+        );
     }
 
     async fn handle_tool_call_codex_session_reply(
         &self,
         request_id: RequestId,
         arguments: Option<rmcp::model::JsonObject>,
+        trajectory_span: Span,
     ) {
         let arguments = arguments.map(serde_json::Value::Object);
         tracing::info!("tools/call -> params: {:?}", arguments);
@@ -493,6 +508,7 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            .instrument(trajectory_span)
         });
     }
 
@@ -578,5 +594,105 @@ impl MessageProcessor {
 
     fn handle_initialized_notification(&self) {
         tracing::info!("notifications/initialized");
+    }
+}
+
+fn mcp_tool_call_trajectory_span(tool_name: &'static str) -> Span {
+    info_span!(
+        "mcp_server.tool_call",
+        otel.kind = "server",
+        otel.name = "tools/call",
+        rpc.system = "jsonrpc",
+        rpc.method = "tools/call",
+        rpc.transport = "stdio",
+        mcp.tool.name = tool_name,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
+    use tracing::field::Field;
+    use tracing::field::Visit;
+    use tracing::span::Attributes;
+    use tracing::span::Id;
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::registry::LookupSpan;
+
+    #[derive(Clone, Default)]
+    struct SpanCapture {
+        spans: Arc<StdMutex<Vec<CapturedSpan>>>,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct CapturedSpan {
+        name: String,
+        fields: BTreeMap<String, String>,
+    }
+
+    #[derive(Default)]
+    struct FieldVisitor {
+        fields: BTreeMap<String, String>,
+    }
+
+    impl Visit for FieldVisitor {
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.fields
+                .insert(field.name().to_string(), value.to_string());
+        }
+
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .insert(field.name().to_string(), format!("{value:?}"));
+        }
+    }
+
+    impl<S> Layer<S> for SpanCapture
+    where
+        S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+    {
+        fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+            let mut visitor = FieldVisitor::default();
+            attrs.record(&mut visitor);
+            self.spans
+                .lock()
+                .expect("span capture lock")
+                .push(CapturedSpan {
+                    name: attrs.metadata().name().to_string(),
+                    fields: visitor.fields,
+                });
+        }
+    }
+
+    #[test]
+    fn trajectory_span_contains_only_coarse_mcp_metadata() {
+        let capture = SpanCapture::default();
+        let spans = Arc::clone(&capture.spans);
+        let subscriber = tracing_subscriber::registry().with(capture);
+
+        tracing::subscriber::with_default(subscriber, || {
+            drop(mcp_tool_call_trajectory_span("codex-reply"));
+        });
+
+        assert_eq!(
+            *spans.lock().expect("span capture lock"),
+            vec![CapturedSpan {
+                name: "mcp_server.tool_call".to_string(),
+                fields: BTreeMap::from([
+                    ("mcp.tool.name".to_string(), "codex-reply".to_string()),
+                    ("otel.kind".to_string(), "server".to_string()),
+                    ("otel.name".to_string(), "tools/call".to_string()),
+                    ("rpc.method".to_string(), "tools/call".to_string()),
+                    ("rpc.system".to_string(), "jsonrpc".to_string()),
+                    ("rpc.transport".to_string(), "stdio".to_string()),
+                ]),
+            }]
+        );
     }
 }
